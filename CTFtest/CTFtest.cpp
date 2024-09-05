@@ -28,8 +28,7 @@ void printstr(uint8_t REG[3][16]) {
 		cout << "REG[" << i << "]: " << reg_string << std::endl;
 	}
 }
-
-static const uint8_t rsbox[256] = {
+static const uint8_t inv_sbox[256] = {
   0x52, 0x09, 0x6a, 0xd5, 0x30, 0x36, 0xa5, 0x38, 0xbf, 0x40, 0xa3, 0x9e, 0x81, 0xf3, 0xd7, 0xfb,
   0x7c, 0xe3, 0x39, 0x82, 0x9b, 0x2f, 0xff, 0x87, 0x34, 0x8e, 0x43, 0x44, 0xc4, 0xde, 0xe9, 0xcb,
   0x54, 0x7b, 0x94, 0x32, 0xa6, 0xc2, 0x23, 0x3d, 0xee, 0x4c, 0x95, 0x0b, 0x42, 0xfa, 0xc3, 0x4e,
@@ -46,80 +45,97 @@ static const uint8_t rsbox[256] = {
   0x60, 0x51, 0x7f, 0xa9, 0x19, 0xb5, 0x4a, 0x0d, 0x2d, 0xe5, 0x7a, 0x9f, 0x93, 0xc9, 0x9c, 0xef,
   0xa0, 0xe0, 0x3b, 0x4d, 0xae, 0x2a, 0xf5, 0xb0, 0xc8, 0xeb, 0xbb, 0x3c, 0x83, 0x53, 0x99, 0x61,
   0x17, 0x2b, 0x04, 0x7e, 0xba, 0x77, 0xd6, 0x26, 0xe1, 0x69, 0x14, 0x63, 0x55, 0x21, 0x0c, 0x7d };
-
-// By inverting the {key:value} mapping for the S-Box, we can perform the same method.
-void InvSubBytes(uint8_t state[16]) {
+void subBytes(uint8_t* state) {
 	for (int i = 0; i < 16; i++) {
-		state[i] = rsbox[state[i]];
+		state[i] = inv_sbox[state[i]];
 	}
 }
-// Shift to the right instead of to the left.
-void shift_rows(uint8_t state[16]) {
+
+void shiftRows(uint8_t* state) {
 	uint8_t temp;
-	// Row 1: no shift
-	// Row 2: shift right by 1
+
+	// Row 1: No change
+
+	// Row 2: Shift right by 1
 	temp = state[13];
 	state[13] = state[9];
 	state[9] = state[5];
 	state[5] = state[1];
 	state[1] = temp;
-	// Row 3: shift right by 2
+
+	// Row 3: Shift right by 2
 	temp = state[2];
 	state[2] = state[10];
 	state[10] = temp;
 	temp = state[6];
 	state[6] = state[14];
 	state[14] = temp;
-	// Row 4: shift right by 3
-	temp = state[7];
+
+	// Row 4: Shift right by 3 (equivalent to shift left by 1)
+	temp = state[3];
+	state[3] = state[7];
 	state[7] = state[11];
 	state[11] = state[15];
-	state[15] = state[3];
-	state[3] = temp;
+	state[15] = temp;
 }
-static uint8_t xtime(uint8_t x)
-{
-	return ((x << 1) ^ (((x >> 7) & 1) * 0x1b));
-}
-static uint8_t Multiply(uint8_t x, uint8_t y)
-{
-	return (((y & 1) * x) ^
-		((y >> 1 & 1) * xtime(x)) ^
-		((y >> 2 & 1) * xtime(xtime(x))) ^
-		((y >> 3 & 1) * xtime(xtime(xtime(x)))) ^
-		((y >> 4 & 1) * xtime(xtime(xtime(xtime(x)))))); /* this last call to xtime() can be omitted */
-}
-void InvMixColumns(uint8_t out[16]) {
-	uint8_t a, b, c, d;
-	for (int i = 0; i < 4; ++i) {
-		a = out[i * 4 + 0];
-		b = out[i * 4 + 1];
-		c = out[i * 4 + 2];
-		d = out[i * 4 + 3];
 
-		out[i * 4 + 0] = Multiply(a, 0x0e) ^ Multiply(b, 0x0b) ^ Multiply(c, 0x0d) ^ Multiply(d, 0x09);
-		out[i * 4 + 1] = Multiply(a, 0x09) ^ Multiply(b, 0x0e) ^ Multiply(c, 0x0b) ^ Multiply(d, 0x0d);
-		out[i * 4 + 2] = Multiply(a, 0x0d) ^ Multiply(b, 0x09) ^ Multiply(c, 0x0e) ^ Multiply(d, 0x0b);
-		out[i * 4 + 3] = Multiply(a, 0x0b) ^ Multiply(b, 0x0d) ^ Multiply(c, 0x09) ^ Multiply(d, 0x0e);
+static uint8_t gmul(uint8_t a, uint8_t b) {
+	uint8_t p = 0;
+	uint8_t hi_bit_set;
+	for (int i = 0; i < 8; i++) {
+		if (b & 1)
+			p ^= a;
+		hi_bit_set = (a & 0x80);
+		a <<= 1;
+		if (hi_bit_set)
+			a ^= 0x1b; // 0x1b is the irreducible polynomial x^8 + x^4 + x^3 + x + 1
+		b >>= 1;
+	}
+	return p;
+}
+
+// Inverse MixColumns function
+void mixColumns(uint8_t* state) {
+	for (int i = 0; i < 4; i++) {
+		uint8_t a = state[i * 4];
+		uint8_t b = state[i * 4 + 1];
+		uint8_t c = state[i * 4 + 2];
+		uint8_t d = state[i * 4 + 3];
+
+		state[i * 4] = gmul(a, 0x0e) ^ gmul(b, 0x0b) ^ gmul(c, 0x0d) ^ gmul(d, 0x09);
+		state[i * 4 + 1] = gmul(a, 0x09) ^ gmul(b, 0x0e) ^ gmul(c, 0x0b) ^ gmul(d, 0x0d);
+		state[i * 4 + 2] = gmul(a, 0x0d) ^ gmul(b, 0x09) ^ gmul(c, 0x0e) ^ gmul(d, 0x0b);
+		state[i * 4 + 3] = gmul(a, 0x0b) ^ gmul(b, 0x0d) ^ gmul(c, 0x09) ^ gmul(d, 0x0e);
 	}
 }
-// We reverse the entire functionality of aesenc
-int aes_dec(uint8_t out[16], const uint8_t key[16]) {
-	// First apply AddRoundKey (XOR with the key)
+
+void addRoundKey(uint8_t* state, uint8_t* roundKey) {
 	for (int i = 0; i < 16; i++) {
-		out[i] ^= key[i];
+		state[i] ^= roundKey[i];
+	}
+}
+
+// Main decryption function
+uint8_t* aes_dec(uint8_t input[16], uint8_t roundkey[16]) {
+	const int numRounds = 14; // Number of rounds for AES-128
+
+	// First round
+	addRoundKey(input, roundkey);
+
+	// Remaining rounds
+	for (int i = 1; i < numRounds; ++i) {
+		shiftRows(input);
+		subBytes(input);
+		mixColumns(input);
+		addRoundKey(input, roundkey + 16 * i);
 	}
 
-	// Apply InvShiftRows
-	shift_rows(out);
+	// Final round
+	shiftRows(input);
+	subBytes(input);
+	addRoundKey(input, roundkey + 16 * numRounds);
 
-	// Apply InvSubBytes
-	InvSubBytes(out);
-
-	// Apply InvMixColumns (except in the final round)
-	InvMixColumns(out);
-
-	return 0;
+	return input; // Return the first byte of the decrypted result
 }
 
 int main() {
@@ -133,31 +149,51 @@ int main() {
 
 	printhex(REG);
 
-	// movaps xmm2, xmm3
-	memcpy(TEMP, &REG[2], sizeof(TEMP));
-	// movaps xmm0, xmm2
-	memcpy(REG[2], &REG[0], sizeof(REG[2]));
-	// movaps xmm3, xmm0
-	memcpy(REG[0], &TEMP, sizeof(REG[0]));
-
+	cout << "Values\n";
+	/*
+	movaps xmm2, xmm3
+	movaps xmm0, xmm2
+	movaps xmm3, xmm0
+	*/
+	memcpy(TEMP, &REG[2], sizeof(TEMP));     // Save REG[2]
+	printhex(REG);
+	memcpy(REG[2], &REG[1], sizeof(REG[2])); // Move REG[1] to REG[2]
+	printhex(REG);
+	memcpy(REG[1], &REG[0], sizeof(REG[1])); // Move REG[0] to REG[1]
+	printhex(REG);
+	memcpy(REG[0], &TEMP, sizeof(REG[0]));   // Move original REG[2] to REG[0]
 	printhex(REG);
 
 	for (int cl = 0; cl != 48; cl++) {
-		// movaps xmm2, xmm3
-		memcpy(TEMP, &REG[2], sizeof(TEMP));
+		/*	
+		movaps xmm2, xmm3
+		movaps xmm1, xmm2
+		movaps xmm0, xmm1
+		*/
+		cout << "Rotate\n";
+		memcpy(TEMP, REG[2], sizeof(TEMP));     // Save REG[2]
 		printhex(REG);
-		// movaps xmm1, xmm2
-		memcpy(REG[2], &REG[1], sizeof(REG[2]));
+		memcpy(REG[2], REG[1], sizeof(REG[2])); // Restore REG[2]'s original value
 		printhex(REG);
-		// movaps xmm0, xmm1
-		memcpy(REG[1], &REG[0], sizeof(REG[1]));
+		memcpy(REG[1], REG[0], sizeof(REG[1])); // Restore REG[1]'s original value
+		printhex(REG);
+		memcpy(REG[0], TEMP, sizeof(REG[0]));   // Restore REG[0]'s original value
 		printhex(REG);
 		
+		cout << "AES\n";
 		// aesenc xmm3, xmm0
-		aes_dec(TEMP, REG[0]);
+		uint8_t* decrypted = aes_dec(TEMP, REG[0]);
+
+		// XOR the result with REG[2]
+		for (int i = 0; i < 16; i++) {
+			decrypted[i] ^= TEMP[i];
+		}
+
+		memcpy(TEMP, &decrypted, 16);
 		
 		printhex(REG);
 		
+		cout << "XOR\n";
 		// xorps xmm3, xmm2
 		for (int i = 0; i < 16; i++) {
 			TEMP[i] = TEMP[i] ^ REG[2][i];
@@ -165,6 +201,7 @@ int main() {
 
 		printhex(REG);
 		
+		cout << "MOVAPS\n";
 		// movaps xmm3, xmm1
 		memcpy(REG[1], &TEMP, sizeof(REG[1]));
 	}
