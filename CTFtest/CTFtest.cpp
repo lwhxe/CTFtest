@@ -4,8 +4,8 @@
 
 using namespace std;
 
-std::string bytes_to_string(const uint8_t* array, size_t size) {
-	std::string result;
+string bytes_to_string(const uint8_t* array, size_t size) {
+	string result;
 	for (size_t i = 0; i < size; i++) {
 		result += static_cast<char>(array[i]);
 	}
@@ -13,22 +13,21 @@ std::string bytes_to_string(const uint8_t* array, size_t size) {
 }
 void printhex(uint8_t REG[3][16]) {
 	for (int i = 0; i < 3; i++) {
-		std::cout << "REG[" << i << "]:	";
+		cout << "REG[" << i << "]:	";
 		for (int j = 0; j < 16; j++) {
-			std::cout << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(REG[i][j]) << " ";
+			cout << hex << setw(2) << setfill('0') << static_cast<int>(REG[i][j]) << " ";
 		}
 		cout << "	";
 	}
-	std::cout << std::endl;
+	cout << endl;
 }
 void printstr(uint8_t REG[3][16]) {
 	// Convert each REG array to a string
 	for (int i = 0; i < 3; i++) {
-		std::string reg_string = bytes_to_string(REG[i], 16);
-		std::cout << "REG[" << i << "]: " << reg_string << std::endl;
+		string reg_string = bytes_to_string(REG[i], 16);
+		cout << "REG[" << i << "]: " << reg_string << std::endl;
 	}
 }
-
 
 static const uint8_t rsbox[256] = {
   0x52, 0x09, 0x6a, 0xd5, 0x30, 0x36, 0xa5, 0x38, 0xbf, 0x40, 0xa3, 0x9e, 0x81, 0xf3, 0xd7, 0xfb,
@@ -78,21 +77,47 @@ void shift_rows(uint8_t state[16]) {
 	state[15] = state[3];
 	state[3] = temp;
 }
+static uint8_t xtime(uint8_t x)
+{
+	return ((x << 1) ^ (((x >> 7) & 1) * 0x1b));
+}
+static uint8_t Multiply(uint8_t x, uint8_t y)
+{
+	return (((y & 1) * x) ^
+		((y >> 1 & 1) * xtime(x)) ^
+		((y >> 2 & 1) * xtime(xtime(x))) ^
+		((y >> 3 & 1) * xtime(xtime(xtime(x)))) ^
+		((y >> 4 & 1) * xtime(xtime(xtime(xtime(x)))))); /* this last call to xtime() can be omitted */
+}
+void InvMixColumns(uint8_t out[16]) {
+	uint8_t a, b, c, d;
+	for (int i = 0; i < 4; ++i) {
+		a = out[i * 4 + 0];
+		b = out[i * 4 + 1];
+		c = out[i * 4 + 2];
+		d = out[i * 4 + 3];
+
+		out[i * 4 + 0] = Multiply(a, 0x0e) ^ Multiply(b, 0x0b) ^ Multiply(c, 0x0d) ^ Multiply(d, 0x09);
+		out[i * 4 + 1] = Multiply(a, 0x09) ^ Multiply(b, 0x0e) ^ Multiply(c, 0x0b) ^ Multiply(d, 0x0d);
+		out[i * 4 + 2] = Multiply(a, 0x0d) ^ Multiply(b, 0x09) ^ Multiply(c, 0x0e) ^ Multiply(d, 0x0b);
+		out[i * 4 + 3] = Multiply(a, 0x0b) ^ Multiply(b, 0x0d) ^ Multiply(c, 0x09) ^ Multiply(d, 0x0e);
+	}
+}
 // We reverse the entire functionality of aesenc
-int aes_enc(uint8_t out[16], const uint8_t key[16]) {
-	// XOR can be reversed by performing the same action again.
+int aes_dec(uint8_t out[16], const uint8_t key[16]) {
+	// First apply AddRoundKey (XOR with the key)
 	for (int i = 0; i < 16; i++) {
 		out[i] ^= key[i];
 	}
-	// Galois Field is usually multiplied by, this however is divided.
-	int GF[16] = { 2, 3, 1, 1, 1, 2, 3, 1, 1, 1, 2, 3, 3, 1, 1, 2 };
-	for (int i = 0; i < 16; i++) {
-		out[i] /= GF[i];
-	}
-	// We shift the rows to the right instead of to the left.
+
+	// Apply InvShiftRows
 	shift_rows(out);
-	// We've inverted the substitution method.
+
+	// Apply InvSubBytes
 	InvSubBytes(out);
+
+	// Apply InvMixColumns (except in the final round)
+	InvMixColumns(out);
 
 	return 0;
 }
@@ -105,36 +130,47 @@ int main() {
 	};
 
  	uint8_t TEMP[16] = {};
+
 	printhex(REG);
+
 	// movaps xmm2, xmm3
-	memcpy(TEMP, REG[2], sizeof(TEMP));
+	memcpy(TEMP, &REG[2], sizeof(TEMP));
 	// movaps xmm0, xmm2
-	memcpy(REG[2], REG[0], sizeof(REG[2]));
-	// movaps xmm2, xmm3
-	memcpy(REG[0], TEMP, sizeof(REG[0]));
+	memcpy(REG[2], &REG[0], sizeof(REG[2]));
+	// movaps xmm3, xmm0
+	memcpy(REG[0], &TEMP, sizeof(REG[0]));
+
 	printhex(REG);
+
 	for (int cl = 0; cl != 48; cl++) {
 		// movaps xmm2, xmm3
-		memcpy(TEMP, REG[2], sizeof(TEMP));
+		memcpy(TEMP, &REG[2], sizeof(TEMP));
+		printhex(REG);
 		// movaps xmm1, xmm2
-		memcpy(REG[2], REG[1], sizeof(REG[2]));
+		memcpy(REG[2], &REG[1], sizeof(REG[2]));
+		printhex(REG);
 		// movaps xmm0, xmm1
-		memcpy(REG[1], REG[0], sizeof(REG[1]));
+		memcpy(REG[1], &REG[0], sizeof(REG[1]));
 		printhex(REG);
+		
 		// aesenc xmm3, xmm0
-		aes_enc(TEMP, REG[0]);
+		aes_dec(TEMP, REG[0]);
+		
 		printhex(REG);
+		
 		// xorps xmm3, xmm2
-		int inc = 0;
-		for (auto x : TEMP) {
-			x = x ^ REG[2][inc++];
+		for (int i = 0; i < 16; i++) {
+			TEMP[i] = TEMP[i] ^ REG[2][i];
 		}
-		inc = 0;
+
 		printhex(REG);
+		
 		// movaps xmm3, xmm1
-		memcpy(REG[1], TEMP, sizeof(REG[1]));
+		memcpy(REG[1], &TEMP, sizeof(REG[1]));
 	}
+	
 	printhex(REG);
+	printstr(REG);
 
 	return 0;
 }
